@@ -6,6 +6,7 @@ from django.utils.dateparse import parse_date
 from rest_framework import filters, viewsets, status
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.exceptions import ValidationError
+from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import SAFE_METHODS, BasePermission, IsAuthenticated
 from rest_framework.response import Response
 
@@ -100,6 +101,87 @@ class LeadViewSet(RoleFilterMixin, viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
     search_fields = ['first_name', 'last_name', 'company', 'email', 'phone', 'status', 'lead_source']
     ordering_fields = ['created_at', 'updated_at', 'first_name', 'last_name', 'company', 'status']
+
+    @action(
+        detail=False,
+        methods=['post'],
+        url_path='import-csv',
+        parser_classes=[MultiPartParser, FormParser],
+    )
+    def import_csv(self, request):
+        uploaded_file = request.FILES.get('file')
+        if uploaded_file is None:
+            return Response({'detail': 'Choose a CSV file to import.'}, status=status.HTTP_400_BAD_REQUEST)
+        if uploaded_file.size > 2 * 1024 * 1024:
+            return Response({'detail': 'CSV file must be 2 MB or smaller.'}, status=status.HTTP_400_BAD_REQUEST)
+        if not uploaded_file.name.lower().endswith('.csv'):
+            return Response({'detail': 'Upload a .csv file.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        import csv
+        import io
+
+        try:
+            csv_text = uploaded_file.read().decode('utf-8-sig')
+        except UnicodeDecodeError:
+            return Response({'detail': 'CSV must use UTF-8 encoding.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        reader = csv.DictReader(io.StringIO(csv_text, newline=''))
+        if not reader.fieldnames:
+            return Response({'detail': 'CSV must include a header row.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        normalized_headers = [header.strip().lower().replace(' ', '_') if header else '' for header in reader.fieldnames]
+        required_headers = {'first_name', 'last_name', 'company', 'email'}
+        missing_headers = sorted(required_headers - set(normalized_headers))
+        if missing_headers:
+            return Response({'detail': f"CSV is missing required columns: {', '.join(missing_headers)}."}, status=status.HTTP_400_BAD_REQUEST)
+        if len(normalized_headers) != len(set(normalized_headers)):
+            return Response({'detail': 'CSV contains duplicate column names.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        csv_rows = list(reader)
+        if len(csv_rows) > 500:
+            return Response({'detail': 'A single import can contain at most 500 data rows.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        allowed_fields = {
+            'first_name', 'last_name', 'company', 'email', 'phone', 'lead_source',
+            'status', 'industry', 'designation', 'notes', 'assigned_to',
+        }
+        imported_count = 0
+        errors = []
+        seen_emails = set()
+
+        for row_number, csv_row in enumerate(csv_rows, start=2):
+            row_data = {
+                normalized_headers[index]: (value or '').strip()
+                for index, value in enumerate(csv_row.values())
+                if index < len(normalized_headers) and normalized_headers[index] in allowed_fields
+            }
+            if not any(row_data.values()):
+                continue
+
+            email = row_data.get('email', '').lower()
+            if email in seen_emails or Lead.objects.filter(email__iexact=email).exists():
+                errors.append({'row': row_number, 'email': email, 'errors': {'email': ['A lead with this email already exists.']}})
+                continue
+
+            serializer = self.get_serializer(data=row_data)
+            if not serializer.is_valid():
+                errors.append({'row': row_number, 'email': email, 'errors': serializer.errors})
+                continue
+
+            try:
+                with transaction.atomic():
+                    self.perform_create(serializer)
+            except ValidationError as error:
+                errors.append({'row': row_number, 'email': email, 'errors': error.detail})
+                continue
+            seen_emails.add(email)
+            imported_count += 1
+
+        return Response({
+            'imported_count': imported_count,
+            'failed_count': len(errors),
+            'errors': errors,
+        }, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=['post'])
     def convert(self, request, pk=None):

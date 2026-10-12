@@ -51,7 +51,7 @@ Open the URL Vite prints (usually `http://localhost:5173`). If using pgAdmin, co
 - `/api/auth/team/create/`, `/api/auth/change-password/`
 - `/api/crm/dashboard/`
 - `/api/crm/search/`, `/api/crm/reports/`
-- `/api/crm/leads/`, `/api/crm/leads/{id}/convert/`
+- `/api/crm/leads/`, `/api/crm/leads/import-csv/`, `/api/crm/leads/{id}/convert/`
 - `/api/crm/contacts/`, `/api/crm/accounts/`, `/api/crm/deals/`
 - `/api/crm/deals/{id}/stage-history/`
 - `/api/crm/tasks/`, `/api/crm/activities/`, `/api/crm/requests/`
@@ -60,6 +60,8 @@ Open the URL Vite prints (usually `http://localhost:5173`). If using pgAdmin, co
 - `/api/crm/requests/{id}/updates/`, `/api/crm/requests/{id}/add-update/`
 
 CRM list APIs use DRF pagination and support configured search/ordering on the core record modules. JWT access tokens are sent by the shared Axios client.
+
+The Leads screen accepts UTF-8 CSV files up to 2 MB and 500 rows. Required headers: `first_name`, `last_name`, `company`, `email`. Optional headers: `phone`, `lead_source`, `status`, `industry`, `designation`, `notes`, `assigned_to`. The CSV template can be downloaded from the Leads page. Duplicate emails and invalid rows are reported by row number; valid rows in the same file are still imported.
 
 ## Development Data and Tests
 
@@ -70,7 +72,7 @@ CRM list APIs use DRF pagination and support configured search/ordering on the c
 - Backend validation tests: `python manage.py test apps.crm.tests`.
 - Frontend build: `npm run build`.
 - Frontend lint: `npm run lint`.
-- PostgreSQL-dependent migrations and API behavior require valid local PostgreSQL credentials; no database-backed test suite has been completed yet.
+- Database-backed CRM tests run against Django's isolated PostgreSQL test database when valid local PostgreSQL credentials and permissions are available.
 
 ## Troubleshooting
 

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useParams, useSearchParams } from 'react-router-dom'
-import { Pencil, Plus, Search, Trash2, X } from 'lucide-react'
+import { Download, Pencil, Plus, Search, Trash2, Upload, X } from 'lucide-react'
 import api from '../api/axiosInstance'
 
 const modules = {
@@ -98,6 +98,8 @@ function RecordsPage({ user }) {
   const [requestHistory, setRequestHistory] = useState(null)
   const [requestUpdate, setRequestUpdate] = useState('')
   const [dealHistory, setDealHistory] = useState(null)
+  const [importing, setImporting] = useState(false)
+  const [importResult, setImportResult] = useState(null)
 
   const fields = useMemo(() => config?.fields || [], [config])
   const canAdminister = ['manager', 'admin'].includes(user?.role)
@@ -200,6 +202,50 @@ function RecordsPage({ user }) {
     }
   }
 
+  const downloadLeadTemplate = () => {
+    const headers = ['first_name', 'last_name', 'company', 'email', 'phone', 'lead_source', 'status', 'industry', 'designation', 'notes']
+    const blob = new Blob([`${headers.join(',')}\r\n`], { type: 'text/csv;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = 'crms-leads-template.csv'
+    link.click()
+    URL.revokeObjectURL(url)
+  }
+
+  const importLeads = async (event) => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) return
+
+    const formData = new FormData()
+    formData.append('file', file)
+    setImporting(true)
+    setError('')
+    setNotice('')
+    setImportResult(null)
+    try {
+      const { data } = await api.post('/crm/leads/import-csv/', formData)
+      setImportResult(data)
+      if (data.imported_count > 0) {
+        const { data: listData } = await api.get('/crm/leads/', { params: { page, search: query, ordering } })
+        setRows(Array.isArray(listData) ? listData : listData.results || [])
+        setCount(Array.isArray(listData) ? listData.length : listData.count || 0)
+        setNext(Boolean(listData.next))
+        setPrevious(Boolean(listData.previous))
+      }
+    } catch (requestError) {
+      const responseData = requestError.response?.data
+      setError(responseData?.detail || 'Lead import failed. Check that the file is a valid UTF-8 CSV.')
+    } finally {
+      setImporting(false)
+    }
+  }
+
+  const formatImportErrors = (rowErrors) => Object.entries(rowErrors || {})
+    .flatMap(([field, messages]) => (Array.isArray(messages) ? messages : [messages]).map((message) => `${field}: ${message}`))
+    .join('; ')
+
   const convertLead = async (record) => {
     if (!window.confirm(`Convert ${record.first_name} ${record.last_name} into a linked account and contact?`)) return
     setError('')
@@ -275,13 +321,31 @@ function RecordsPage({ user }) {
           <p className="text-sm text-slate-500">CRM workspace</p>
           <h1 className="text-2xl font-semibold">{config.title}</h1>
         </div>
-        {!readOnlyModule && <button onClick={startCreate} className="inline-flex items-center gap-2 rounded-lg bg-sky-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-sky-800">
-          <Plus size={17} aria-hidden="true" /> Add {singularNames[module]}
-        </button>}
+        <div className="flex flex-wrap items-center gap-2">
+          {module === 'leads' && <>
+            <button onClick={downloadLeadTemplate} className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50">
+              <Download size={16} aria-hidden="true" /> CSV template
+            </button>
+            <label className={`inline-flex cursor-pointer items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 ${importing ? 'pointer-events-none opacity-60' : ''}`}>
+              <Upload size={16} aria-hidden="true" /> {importing ? 'Importing...' : 'Import CSV'}
+              <input type="file" accept=".csv,text/csv" onChange={importLeads} disabled={importing} className="sr-only" aria-label="Import leads from CSV" />
+            </label>
+          </>}
+          {!readOnlyModule && <button onClick={startCreate} className="inline-flex items-center gap-2 rounded-lg bg-sky-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-sky-800">
+            <Plus size={17} aria-hidden="true" /> Add {singularNames[module]}
+          </button>}
+        </div>
       </header>
 
       {error && <div role="alert" className="mb-4 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">{error}</div>}
       {notice && <div role="status" className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{notice}</div>}
+      {importResult && <section className="mb-5 rounded-lg border border-slate-200 bg-white p-4 shadow-sm" aria-live="polite">
+        <h2 className="font-semibold text-slate-800">Lead import results</h2>
+        <p className="mt-1 text-sm text-slate-600">Imported {importResult.imported_count} · Failed {importResult.failed_count}</p>
+        {importResult.errors?.length > 0 && <div className="mt-3 max-h-56 overflow-auto rounded-md border border-rose-100">
+          <ul className="divide-y divide-rose-100">{importResult.errors.map((rowError) => <li key={`${rowError.row}-${rowError.email}`} className="px-3 py-2 text-sm text-rose-800"><span className="font-semibold">Row {rowError.row}{rowError.email ? ` (${rowError.email})` : ''}:</span> {formatImportErrors(rowError.errors)}</li>)}</ul>
+        </div>}
+      </section>}
 
       {formOpen && !readOnlyModule ? (
         <section className="mb-5 rounded-lg border border-slate-200 bg-white p-5 shadow-sm" aria-label={`${editing ? 'Edit' : 'Create'} ${config.title}`}>
